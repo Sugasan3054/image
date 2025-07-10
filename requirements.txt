@@ -5,4 +5,4 @@ gunicorn==21.2.0
 opencv-python-headless==4.8.1.78
 numpy==1.24.3
 face-recognition==1.3.0
-dlib==19.24.2
+# dlib==19.24.2  # この行をコメントアウト
