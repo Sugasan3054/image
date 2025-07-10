@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  face-recognition-app:
+    build: .
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./uploads:/app/uploads
+      - ./known_faces:/app/known_faces
+    environment:
+      - FLASK_ENV=production
+      - FLASK_DEBUG=0
+    restart: unless-stopped
