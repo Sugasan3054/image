@@ -37,6 +37,34 @@ def image_to_base64(image_path):
 def index():
     return render_template('index.html')
 
+# PWA用のmanifest.jsonとservice-worker.jsを提供
+@app.route('/manifest.json')
+def manifest():
+    return jsonify({
+        "name": "Face Recognition App",
+        "short_name": "FaceApp",
+        "start_url": "/",
+        "display": "standalone",
+        "background_color": "#ffffff",
+        "theme_color": "#000000",
+        "icons": [
+            {
+                "src": "/static/icon-192x192.png",
+                "sizes": "192x192",
+                "type": "image/png"
+            },
+            {
+                "src": "/static/icon-512x512.png",
+                "sizes": "512x512",
+                "type": "image/png"
+            }
+        ]
+    })
+
+@app.route('/sw.js')
+def service_worker():
+    return send_file('static/sw.js', mimetype='application/javascript')
+
 @app.route('/upload', methods=['POST'])
 def upload_file():
     if 'file' not in request.files:
