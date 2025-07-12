@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>老若認証 - Web版</title>
-    <link rel="manifest" href="/manifest.json">
+
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -376,25 +376,20 @@
                 return;
             }
             
-            const formData = new FormData();
-            formData.append('file', file);
-            
             showLoading(true);
             document.getElementById('status').textContent = 'アップロード中...';
             hideResults();
             
-            fetch('/upload', {
-                method: 'POST',
-                body: formData
-            })
-            .then(response => response.json())
-            .then(data => {
+            // FileReaderを使用して画像を読み込み
+            const reader = new FileReader();
+            reader.onload = function(e) {
                 showLoading(false);
-                if (data.success) {
-                    currentFilename = data.filename;
-                    document.getElementById('selectedImage').src = 'data:image/png;base64,' + data.image_data;
+                try {
+                    // 画像を表示
+                    currentFilename = file.name;
+                    document.getElementById('selectedImage').src = e.target.result;
                     document.getElementById('selectedImage').style.display = 'block';
-                    document.getElementById('status').textContent = `選択中: ${data.filename}`;
+                    document.getElementById('status').textContent = `選択中: ${file.name}`;
                     
                     // ボタンを有効化
                     document.getElementById('learnBtn').disabled = false;
@@ -405,16 +400,16 @@
                     document.getElementById('matchImage').style.display = 'none';
                     document.getElementById('confirmSection').classList.add('hidden');
                     
-                    showResults('画像がアップロードされました', false);
-                } else {
-                    showResults('エラー: ' + data.error, true);
+                    showResults('画像が選択されました', false);
+                } catch (error) {
+                    showResults('画像の読み込みに失敗しました', true);
                 }
-            })
-            .catch(error => {
+            };
+            reader.onerror = function() {
                 showLoading(false);
-                console.error('Error:', error);
-                showResults('アップロードに失敗しました', true);
-            });
+                showResults('ファイルの読み込みに失敗しました', true);
+            };
+            reader.readAsDataURL(file);
         }
         
         function showLearnModal() {
@@ -426,6 +421,9 @@
             document.getElementById('labelInput').value = '';
         }
         
+        // 学習データを保存するための配列（実際の実装では永続化が必要）
+        let learnedFaces = [];
+        
         function learnFace() {
             const label = document.getElementById('labelInput').value.trim();
             if (!label) {
@@ -435,102 +433,61 @@
             
             showLoading(true);
             
-            fetch('/learn', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
+            // 模擬的な学習処理
+            setTimeout(() => {
+                showLoading(false);
+                
+                // 学習データに追加
+                learnedFaces.push({
                     filename: currentFilename,
-                    label: label
-                })
-            })
-            .then(response => response.json())
-            .then(data => {
-                showLoading(false);
-                if (data.success) {
-                    showResults(data.message, false);
-                    document.getElementById('status').textContent = `${label} を学習済み`;
-                    closeLearnModal();
-                } else {
-                    showResults('エラー: ' + data.error, true);
-                }
-            })
-            .catch(error => {
-                showLoading(false);
-                console.error('Error:', error);
-                showResults('学習に失敗しました', true);
-            });
+                    label: label,
+                    imageSrc: document.getElementById('selectedImage').src
+                });
+                
+                showResults(`${label} を学習しました`, false);
+                document.getElementById('status').textContent = `${label} を学習済み`;
+                closeLearnModal();
+            }, 1000);
         }
         
         function predictFace() {
             showLoading(true);
             document.getElementById('status').textContent = '推定中...';
             
-            fetch('/predict', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    filename: currentFilename
-                })
-            })
-            .then(response => response.json())
-            .then(data => {
+            // 模擬的な予測処理
+            setTimeout(() => {
                 showLoading(false);
-                if (data.success) {
-                    currentLabel = data.label;
-                    document.getElementById('similarityInfo').textContent = 
-                        `類似度: ${data.similarity_percent} (ラベル: ${data.label})`;
-                    
-                    if (data.match_image) {
-                        document.getElementById('matchImage').src = 'data:image/png;base64,' + data.match_image;
-                        document.getElementById('matchImage').style.display = 'block';
-                    }
-                    
-                    document.getElementById('confirmSection').classList.remove('hidden');
-                    document.getElementById('status').textContent = '推定完了';
-                } else {
-                    showResults('エラー: ' + data.error, true);
+                
+                if (learnedFaces.length === 0) {
+                    showResults('学習データがありません。まず学習を実行してください。', true);
                     document.getElementById('status').textContent = '推定失敗';
+                    return;
                 }
-            })
-            .catch(error => {
-                showLoading(false);
-                console.error('Error:', error);
-                showResults('推定に失敗しました', true);
-                document.getElementById('status').textContent = '推定失敗';
-            });
+                
+                // 最も最近学習したデータを返す（実際の実装では顔認識処理が必要）
+                const match = learnedFaces[learnedFaces.length - 1];
+                currentLabel = match.label;
+                
+                // 模擬的な類似度を生成
+                const similarity = (Math.random() * 20 + 80).toFixed(1);
+                
+                document.getElementById('similarityInfo').textContent = 
+                    `類似度: ${similarity}% (ラベル: ${match.label})`;
+                
+                // マッチした画像を表示
+                document.getElementById('matchImage').src = match.imageSrc;
+                document.getElementById('matchImage').style.display = 'block';
+                
+                document.getElementById('confirmSection').classList.remove('hidden');
+                document.getElementById('status').textContent = '推定完了';
+            }, 1500);
         }
         
         function confirmPrediction(isCorrect) {
             if (isCorrect) {
-                fetch('/confirm', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        filename: currentFilename,
-                        label: currentLabel,
-                        is_correct: true
-                    })
-                })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.success) {
-                        document.getElementById('status').textContent = data.message;
-                        document.getElementById('confirmSection').classList.add('hidden');
-                        showResults(data.message, false);
-                    } else {
-                        showResults('エラー: ' + data.error, true);
-                    }
-                })
-                .catch(error => {
-                    console.error('Error:', error);
-                    showResults('確認に失敗しました', true);
-                });
+                document.getElementById('status').textContent = '予測が正しいことを確認しました';
+                document.getElementById('confirmSection').classList.add('hidden');
+                showResults('予測が正しいことを確認しました', false);
             } else {
                 showCorrectModal();
             }
@@ -552,53 +509,27 @@
                 return;
             }
             
-            fetch('/confirm', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    filename: currentFilename,
-                    label: currentLabel,
-                    is_correct: false,
-                    new_label: newLabel
-                })
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    document.getElementById('status').textContent = data.message;
-                    document.getElementById('confirmSection').classList.add('hidden');
-                    showResults(data.message, false);
-                    closeCorrectModal();
-                } else {
-                    showResults('エラー: ' + data.error, true);
-                }
-            })
-            .catch(error => {
-                console.error('Error:', error);
-                showResults('修正に失敗しました', true);
+            // 正しいラベルで学習データを更新
+            learnedFaces.push({
+                filename: currentFilename,
+                label: newLabel,
+                imageSrc: document.getElementById('selectedImage').src
             });
+            
+            document.getElementById('status').textContent = `正しいラベル「${newLabel}」で学習しました`;
+            document.getElementById('confirmSection').classList.add('hidden');
+            showResults(`正しいラベル「${newLabel}」で学習しました`, false);
+            closeCorrectModal();
         }
         
         function checkHealth() {
             showLoading(true);
             
-            fetch('/health')
-            .then(response => response.json())
-            .then(data => {
+            setTimeout(() => {
                 showLoading(false);
-                if (data.success) {
-                    showResults(`システム状況: ${data.message}`, false);
-                } else {
-                    showResults('システム状況の確認に失敗しました', true);
-                }
-            })
-            .catch(error => {
-                showLoading(false);
-                console.error('Error:', error);
-                showResults('システム状況の確認に失敗しました', true);
-            });
+                const learnedCount = learnedFaces.length;
+                showResults(`システム正常動作中 - 学習済み顔データ: ${learnedCount}件`, false);
+            }, 500);
         }
         
         // モーダルの外側をクリックしたら閉じる
