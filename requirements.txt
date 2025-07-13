@@ -6,3 +6,59 @@ numpy==1.24.4
 gunicorn==21.2.0
 dlib==19.24.2
 cmake==3.27.6
+# Core dependencies
+face_recognition==1.3.0
+numpy==1.24.3
+Pillow==10.0.0
+opencv-python==4.8.0.76
+
+# or
+# FastAPI==0.103.1
+# uvicorn==0.23.2
+
+# Database and storage options
+psycopg2-binary==2.9.7     # PostgreSQL support
+pymongo==4.5.0             # MongoDB support
+boto3==1.28.57             # AWS S3 support
+redis==4.6.0               # Redis cache support
+
+# HTTP requests
+requests==2.31.0
+
+# JSON handling
+orjson==3.9.5              # Fast JSON serialization
+
+# Environment variables
+python-dotenv==1.0.0
+
+# Image processing
+opencv-contrib-python==4.8.0.76
+
+# Additional utilities
+click==8.1.7               # CLI tools
+python-multipart==0.0.6    # File upload support
+aiofiles==23.2.1           # Async file operations
+
+# Development dependencies (optional)
+pytest==7.4.2
+pytest-asyncio==0.21.1
+black==23.7.0
+flake8==6.0.0
+
+# Production server (choose one)
+gunicorn==21.2.0           # For Flask
+# or
+# uvicorn[standard]==0.23.2  # For FastAPI
+
+# Security
+cryptography==41.0.4
+
+# Logging
+structlog==23.1.0
+
+# Configuration
+pydantic==2.3.0           # Data validation
+pydantic-settings==2.0.3  # Settings management
+
+# Monitoring (optional)
+sentry-sdk==1.32.0        # Error tracking
