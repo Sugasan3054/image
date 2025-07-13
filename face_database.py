@@ -5,138 +5,216 @@ from PIL import Image
 import json
 import base64
 from io import BytesIO
-import sqlite3
 import pickle
+import requests
+from urllib.parse import urlparse
 
-class FaceDatabase:
-    def __init__(self, use_sqlite=True, db_path="face_database.db"):
+class CloudFaceDatabase:
+    def __init__(self, storage_type="github", **kwargs):
+        """
+        storage_type: "github", "s3", "gcs", "postgresql", "mongodb"
+        """
         self.known_faces = []
         self.known_labels = []
-        self.use_sqlite = use_sqlite
-        self.db_path = db_path
+        self.storage_type = storage_type
+        self.config = kwargs
         
-        if use_sqlite:
-            # SQLiteデータベースを使用
-            self.init_sqlite_db()
-        else:
-            # JSONファイルを使用（従来の方法）
-            self.json_db_file = "face_database.json"
+        # ストレージタイプに応じた初期化
+        if storage_type == "github":
+            self.init_github_storage()
+        elif storage_type == "postgresql":
+            self.init_postgresql()
+        elif storage_type == "s3":
+            self.init_s3_storage()
+        elif storage_type == "mongodb":
+            self.init_mongodb()
         
-        # 既存の顔データを読み込み
+        # 既存データの読み込み
         self.load_known_faces()
     
-    def init_sqlite_db(self):
-        """SQLiteデータベースを初期化"""
+    def init_github_storage(self):
+        """GitHub Gist をストレージとして使用"""
+        self.github_token = self.config.get('github_token')
+        self.gist_id = self.config.get('gist_id')
+        self.gist_filename = self.config.get('gist_filename', 'face_database.json')
+        
+        if not self.github_token:
+            raise ValueError("GitHub token is required for GitHub storage")
+    
+    def init_postgresql(self):
+        """PostgreSQL データベースを初期化"""
         try:
-            conn = sqlite3.connect(self.db_path)
+            import psycopg2
+            
+            self.db_url = self.config.get('database_url') or os.environ.get('DATABASE_URL')
+            if not self.db_url:
+                raise ValueError("Database URL is required for PostgreSQL storage")
+            
+            conn = psycopg2.connect(self.db_url)
             cursor = conn.cursor()
             
-            # テーブルが存在しない場合は作成
+            # テーブル作成
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS faces (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    label TEXT NOT NULL,
-                    encoding BLOB NOT NULL,
+                    id SERIAL PRIMARY KEY,
+                    label VARCHAR(255) NOT NULL,
+                    encoding BYTEA NOT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
             
-            # インデックスを作成
             cursor.execute('''
-                CREATE INDEX IF NOT EXISTS idx_label ON faces(label)
+                CREATE INDEX IF NOT EXISTS idx_faces_label ON faces(label)
             ''')
             
             conn.commit()
             conn.close()
             
-            print(f"SQLite database initialized: {self.db_path}")
-        except Exception as e:
-            print(f"Error initializing SQLite database: {e}")
+        except ImportError:
+            raise ImportError("psycopg2 is required for PostgreSQL storage. Install with: pip install psycopg2-binary")
+    
+    def init_s3_storage(self):
+        """Amazon S3 ストレージを初期化"""
+        try:
+            import boto3
+            
+            self.s3_client = boto3.client(
+                's3',
+                aws_access_key_id=self.config.get('aws_access_key_id'),
+                aws_secret_access_key=self.config.get('aws_secret_access_key'),
+                region_name=self.config.get('aws_region', 'us-east-1')
+            )
+            self.bucket_name = self.config.get('bucket_name')
+            self.s3_key = self.config.get('s3_key', 'face_database.json')
+            
+        except ImportError:
+            raise ImportError("boto3 is required for S3 storage. Install with: pip install boto3")
+    
+    def init_mongodb(self):
+        """MongoDB を初期化"""
+        try:
+            import pymongo
+            
+            self.mongo_url = self.config.get('mongo_url') or os.environ.get('MONGODB_URI')
+            if not self.mongo_url:
+                raise ValueError("MongoDB URL is required for MongoDB storage")
+            
+            self.client = pymongo.MongoClient(self.mongo_url)
+            self.db = self.client.face_recognition
+            self.collection = self.db.faces
+            
+        except ImportError:
+            raise ImportError("pymongo is required for MongoDB storage. Install with: pip install pymongo")
     
     def load_known_faces(self):
-        """既存の顔データを読み込む"""
+        """ストレージから顔データを読み込む"""
         try:
-            if self.use_sqlite:
-                self.load_from_sqlite()
-            else:
-                self.load_from_json()
-                
-            print(f"Loaded {len(self.known_faces)} known faces from database")
+            if self.storage_type == "github":
+                self.load_from_github()
+            elif self.storage_type == "postgresql":
+                self.load_from_postgresql()
+            elif self.storage_type == "s3":
+                self.load_from_s3()
+            elif self.storage_type == "mongodb":
+                self.load_from_mongodb()
+            
+            print(f"Loaded {len(self.known_faces)} known faces from {self.storage_type}")
         except Exception as e:
             print(f"Error loading known faces: {e}")
     
-    def load_from_sqlite(self):
-        """SQLiteから顔データを読み込む"""
+    def load_from_github(self):
+        """GitHub Gist から読み込み"""
         try:
-            if os.path.exists(self.db_path):
-                conn = sqlite3.connect(self.db_path)
-                cursor = conn.cursor()
+            if not self.gist_id:
+                print("No gist_id provided, starting with empty database")
+                return
+            
+            url = f"https://api.github.com/gists/{self.gist_id}"
+            headers = {"Authorization": f"token {self.github_token}"}
+            
+            response = requests.get(url, headers=headers)
+            if response.status_code == 200:
+                gist_data = response.json()
+                content = gist_data['files'][self.gist_filename]['content']
+                data = json.loads(content)
                 
-                cursor.execute("SELECT label, encoding FROM faces")
-                rows = cursor.fetchall()
-                
-                for label, encoding_blob in rows:
-                    # バイナリデータから配列を復元
-                    encoding = pickle.loads(encoding_blob)
-                    self.known_faces.append(encoding)
-                    self.known_labels.append(label)
-                
-                conn.close()
-        except Exception as e:
-            print(f"Error loading from SQLite: {e}")
-    
-    def load_from_json(self):
-        """JSONファイルから顔データを読み込む"""
-        try:
-            if os.path.exists(self.json_db_file):
-                with open(self.json_db_file, 'r') as f:
-                    data = json.load(f)
-                    
                 for item in data:
                     encoding = np.array(item['encoding'])
                     label = item['label']
                     
                     self.known_faces.append(encoding)
                     self.known_labels.append(label)
+            else:
+                print(f"Failed to load from GitHub: {response.status_code}")
         except Exception as e:
-            print(f"Error loading from JSON: {e}")
+            print(f"Error loading from GitHub: {e}")
+    
+    def load_from_postgresql(self):
+        """PostgreSQL から読み込み"""
+        try:
+            import psycopg2
+            
+            conn = psycopg2.connect(self.db_url)
+            cursor = conn.cursor()
+            
+            cursor.execute("SELECT label, encoding FROM faces")
+            rows = cursor.fetchall()
+            
+            for label, encoding_bytes in rows:
+                encoding = pickle.loads(encoding_bytes)
+                self.known_faces.append(encoding)
+                self.known_labels.append(label)
+            
+            conn.close()
+        except Exception as e:
+            print(f"Error loading from PostgreSQL: {e}")
+    
+    def load_from_s3(self):
+        """Amazon S3 から読み込み"""
+        try:
+            response = self.s3_client.get_object(Bucket=self.bucket_name, Key=self.s3_key)
+            content = response['Body'].read().decode('utf-8')
+            data = json.loads(content)
+            
+            for item in data:
+                encoding = np.array(item['encoding'])
+                label = item['label']
+                
+                self.known_faces.append(encoding)
+                self.known_labels.append(label)
+        except Exception as e:
+            print(f"Error loading from S3: {e}")
+    
+    def load_from_mongodb(self):
+        """MongoDB から読み込み"""
+        try:
+            for doc in self.collection.find():
+                encoding = np.array(doc['encoding'])
+                label = doc['label']
+                
+                self.known_faces.append(encoding)
+                self.known_labels.append(label)
+        except Exception as e:
+            print(f"Error loading from MongoDB: {e}")
     
     def save_database(self):
         """データベースを保存"""
         try:
-            if self.use_sqlite:
-                self.save_to_sqlite()
-            else:
-                self.save_to_json()
-                
-            print(f"Database saved with {len(self.known_faces)} faces")
+            if self.storage_type == "github":
+                self.save_to_github()
+            elif self.storage_type == "postgresql":
+                self.save_to_postgresql()
+            elif self.storage_type == "s3":
+                self.save_to_s3()
+            elif self.storage_type == "mongodb":
+                self.save_to_mongodb()
+            
+            print(f"Database saved to {self.storage_type} with {len(self.known_faces)} faces")
         except Exception as e:
             print(f"Error saving database: {e}")
     
-    def save_to_sqlite(self):
-        """SQLiteに保存"""
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            # 最新の顔データのみを保存（重複を避けるため、一旦クリア）
-            cursor.execute("DELETE FROM faces")
-            
-            # 現在のデータを保存
-            for i, encoding in enumerate(self.known_faces):
-                encoding_blob = pickle.dumps(encoding)
-                cursor.execute(
-                    "INSERT INTO faces (label, encoding) VALUES (?, ?)",
-                    (self.known_labels[i], encoding_blob)
-                )
-            
-            conn.commit()
-            conn.close()
-        except Exception as e:
-            print(f"Error saving to SQLite: {e}")
-    
-    def save_to_json(self):
-        """JSONファイルに保存"""
+    def save_to_github(self):
+        """GitHub Gist に保存"""
         try:
             data = []
             for i, encoding in enumerate(self.known_faces):
@@ -145,10 +223,110 @@ class FaceDatabase:
                     'encoding': encoding.tolist()
                 })
             
-            with open(self.json_db_file, 'w') as f:
-                json.dump(data, f)
+            content = json.dumps(data, indent=2)
+            
+            if self.gist_id:
+                # 既存のGistを更新
+                url = f"https://api.github.com/gists/{self.gist_id}"
+                payload = {
+                    "files": {
+                        self.gist_filename: {
+                            "content": content
+                        }
+                    }
+                }
+            else:
+                # 新しいGistを作成
+                url = "https://api.github.com/gists"
+                payload = {
+                    "description": "Face recognition database",
+                    "public": False,
+                    "files": {
+                        self.gist_filename: {
+                            "content": content
+                        }
+                    }
+                }
+            
+            headers = {"Authorization": f"token {self.github_token}"}
+            
+            if self.gist_id:
+                response = requests.patch(url, json=payload, headers=headers)
+            else:
+                response = requests.post(url, json=payload, headers=headers)
+            
+            if response.status_code in [200, 201]:
+                if not self.gist_id:
+                    self.gist_id = response.json()['id']
+                    print(f"Created new gist: {self.gist_id}")
+            else:
+                print(f"Failed to save to GitHub: {response.status_code}")
         except Exception as e:
-            print(f"Error saving to JSON: {e}")
+            print(f"Error saving to GitHub: {e}")
+    
+    def save_to_postgresql(self):
+        """PostgreSQL に保存"""
+        try:
+            import psycopg2
+            
+            conn = psycopg2.connect(self.db_url)
+            cursor = conn.cursor()
+            
+            # 既存データを削除
+            cursor.execute("DELETE FROM faces")
+            
+            # 新しいデータを挿入
+            for i, encoding in enumerate(self.known_faces):
+                encoding_bytes = pickle.dumps(encoding)
+                cursor.execute(
+                    "INSERT INTO faces (label, encoding) VALUES (%s, %s)",
+                    (self.known_labels[i], encoding_bytes)
+                )
+            
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print(f"Error saving to PostgreSQL: {e}")
+    
+    def save_to_s3(self):
+        """Amazon S3 に保存"""
+        try:
+            data = []
+            for i, encoding in enumerate(self.known_faces):
+                data.append({
+                    'label': self.known_labels[i],
+                    'encoding': encoding.tolist()
+                })
+            
+            content = json.dumps(data, indent=2)
+            
+            self.s3_client.put_object(
+                Bucket=self.bucket_name,
+                Key=self.s3_key,
+                Body=content,
+                ContentType='application/json'
+            )
+        except Exception as e:
+            print(f"Error saving to S3: {e}")
+    
+    def save_to_mongodb(self):
+        """MongoDB に保存"""
+        try:
+            # 既存データを削除
+            self.collection.delete_many({})
+            
+            # 新しいデータを挿入
+            documents = []
+            for i, encoding in enumerate(self.known_faces):
+                documents.append({
+                    'label': self.known_labels[i],
+                    'encoding': encoding.tolist()
+                })
+            
+            if documents:
+                self.collection.insert_many(documents)
+        except Exception as e:
+            print(f"Error saving to MongoDB: {e}")
     
     def add_face(self, image_path, label):
         """新しい顔を学習データに追加"""
@@ -164,7 +342,7 @@ class FaceDatabase:
             self.known_faces.append(encodings[0])
             self.known_labels.append(label)
             
-            # データベースを保存
+            # クラウドに保存
             self.save_database()
             
             print(f"Added face for label: {label}")
@@ -195,10 +373,10 @@ class FaceDatabase:
             min_distance_index = np.argmin(distances)
             min_distance = distances[min_distance_index]
             
-            # 類似度を計算（距離が小さいほど類似度が高い）
+            # 類似度を計算
             similarity = 1 - min_distance
             
-            # 閾値を設定（0.6以上で一致とみなす）
+            # 閾値を設定
             threshold = 0.6
             
             if similarity >= threshold:
@@ -225,49 +403,35 @@ class FaceDatabase:
             'unique_labels': len(set(self.known_labels)),
             'labels': dict([(label, self.get_face_count(label)) for label in set(self.known_labels)])
         }
-    
-    def backup_database(self, backup_path):
-        """データベースをバックアップ"""
-        try:
-            if self.use_sqlite:
-                # SQLiteファイルをコピー
-                import shutil
-                shutil.copy2(self.db_path, backup_path)
-            else:
-                # JSONファイルをコピー
-                import shutil
-                shutil.copy2(self.json_db_file, backup_path)
-            
-            print(f"Database backed up to: {backup_path}")
-        except Exception as e:
-            print(f"Error backing up database: {e}")
-    
-    def restore_database(self, backup_path):
-        """バックアップからデータベースを復元"""
-        try:
-            if self.use_sqlite:
-                import shutil
-                shutil.copy2(backup_path, self.db_path)
-            else:
-                import shutil
-                shutil.copy2(backup_path, self.json_db_file)
-            
-            # データを再読み込み
-            self.known_faces = []
-            self.known_labels = []
-            self.load_known_faces()
-            
-            print(f"Database restored from: {backup_path}")
-        except Exception as e:
-            print(f"Error restoring database: {e}")
 
 # 使用例
 if __name__ == "__main__":
-    # SQLiteを使用する場合
-    db = FaceDatabase(use_sqlite=True, db_path="persistent_face_db.db")
+    # GitHub Gist を使用
+    github_db = CloudFaceDatabase(
+        storage_type="github",
+        github_token="your_github_token",
+        gist_id="your_gist_id"  # 初回は None
+    )
     
-    # JSONを使用する場合
-    # db = FaceDatabase(use_sqlite=False)
+    # PostgreSQL を使用 (Heroku、Railway等)
+    # postgresql_db = CloudFaceDatabase(
+    #     storage_type="postgresql",
+    #     database_url="postgresql://user:pass@host:port/db"
+    # )
     
-    # 統計情報を表示
-    print("Database stats:", db.get_stats())
+    # Amazon S3 を使用
+    # s3_db = CloudFaceDatabase(
+    #     storage_type="s3",
+    #     aws_access_key_id="your_access_key",
+    #     aws_secret_access_key="your_secret_key",
+    #     bucket_name="your_bucket",
+    #     s3_key="face_database.json"
+    # )
+    
+    # MongoDB を使用
+    # mongo_db = CloudFaceDatabase(
+    #     storage_type="mongodb",
+    #     mongo_url="mongodb://user:pass@host:port/db"
+    # )
+    
+    print("Database stats:", github_db.get_stats())
