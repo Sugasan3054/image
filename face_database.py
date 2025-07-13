@@ -2,54 +2,141 @@ import face_recognition
 import os
 import numpy as np
 from PIL import Image
-import tempfile
 import json
 import base64
 from io import BytesIO
+import sqlite3
+import pickle
 
 class FaceDatabase:
-    def __init__(self):
+    def __init__(self, use_sqlite=True, db_path="face_database.db"):
         self.known_faces = []
         self.known_labels = []
+        self.use_sqlite = use_sqlite
+        self.db_path = db_path
         
-        # 一時ディレクトリを使用（Railway対応）
-        self.temp_dir = tempfile.mkdtemp()
-        self.known_faces_dir = os.path.join(self.temp_dir, "known_faces")
+        if use_sqlite:
+            # SQLiteデータベースを使用
+            self.init_sqlite_db()
+        else:
+            # JSONファイルを使用（従来の方法）
+            self.json_db_file = "face_database.json"
         
-        # データベースファイルのパス（メモリ内で管理）
-        self.db_file = os.path.join(self.temp_dir, "face_database.json")
-        
-        # known_facesディレクトリの作成
-        try:
-            os.makedirs(self.known_faces_dir, exist_ok=True)
-            print(f"Known faces directory created: {self.known_faces_dir}")
-        except Exception as e:
-            print(f"Error creating known faces directory: {e}")
-        
-        # 既存の顔データを読み込み（本番環境では初期化時は空）
+        # 既存の顔データを読み込み
         self.load_known_faces()
+    
+    def init_sqlite_db(self):
+        """SQLiteデータベースを初期化"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # テーブルが存在しない場合は作成
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS faces (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    label TEXT NOT NULL,
+                    encoding BLOB NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
+            # インデックスを作成
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_label ON faces(label)
+            ''')
+            
+            conn.commit()
+            conn.close()
+            
+            print(f"SQLite database initialized: {self.db_path}")
+        except Exception as e:
+            print(f"Error initializing SQLite database: {e}")
     
     def load_known_faces(self):
         """既存の顔データを読み込む"""
         try:
-            if os.path.exists(self.db_file):
-                with open(self.db_file, 'r') as f:
+            if self.use_sqlite:
+                self.load_from_sqlite()
+            else:
+                self.load_from_json()
+                
+            print(f"Loaded {len(self.known_faces)} known faces from database")
+        except Exception as e:
+            print(f"Error loading known faces: {e}")
+    
+    def load_from_sqlite(self):
+        """SQLiteから顔データを読み込む"""
+        try:
+            if os.path.exists(self.db_path):
+                conn = sqlite3.connect(self.db_path)
+                cursor = conn.cursor()
+                
+                cursor.execute("SELECT label, encoding FROM faces")
+                rows = cursor.fetchall()
+                
+                for label, encoding_blob in rows:
+                    # バイナリデータから配列を復元
+                    encoding = pickle.loads(encoding_blob)
+                    self.known_faces.append(encoding)
+                    self.known_labels.append(label)
+                
+                conn.close()
+        except Exception as e:
+            print(f"Error loading from SQLite: {e}")
+    
+    def load_from_json(self):
+        """JSONファイルから顔データを読み込む"""
+        try:
+            if os.path.exists(self.json_db_file):
+                with open(self.json_db_file, 'r') as f:
                     data = json.load(f)
                     
-                # エンコーディングデータを復元
                 for item in data:
                     encoding = np.array(item['encoding'])
                     label = item['label']
                     
                     self.known_faces.append(encoding)
                     self.known_labels.append(label)
-                    
-                print(f"Loaded {len(self.known_faces)} known faces from database")
         except Exception as e:
-            print(f"Error loading known faces: {e}")
+            print(f"Error loading from JSON: {e}")
     
     def save_database(self):
-        """データベースをファイルに保存"""
+        """データベースを保存"""
+        try:
+            if self.use_sqlite:
+                self.save_to_sqlite()
+            else:
+                self.save_to_json()
+                
+            print(f"Database saved with {len(self.known_faces)} faces")
+        except Exception as e:
+            print(f"Error saving database: {e}")
+    
+    def save_to_sqlite(self):
+        """SQLiteに保存"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # 最新の顔データのみを保存（重複を避けるため、一旦クリア）
+            cursor.execute("DELETE FROM faces")
+            
+            # 現在のデータを保存
+            for i, encoding in enumerate(self.known_faces):
+                encoding_blob = pickle.dumps(encoding)
+                cursor.execute(
+                    "INSERT INTO faces (label, encoding) VALUES (?, ?)",
+                    (self.known_labels[i], encoding_blob)
+                )
+            
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print(f"Error saving to SQLite: {e}")
+    
+    def save_to_json(self):
+        """JSONファイルに保存"""
         try:
             data = []
             for i, encoding in enumerate(self.known_faces):
@@ -58,12 +145,10 @@ class FaceDatabase:
                     'encoding': encoding.tolist()
                 })
             
-            with open(self.db_file, 'w') as f:
+            with open(self.json_db_file, 'w') as f:
                 json.dump(data, f)
-                
-            print(f"Database saved with {len(data)} faces")
         except Exception as e:
-            print(f"Error saving database: {e}")
+            print(f"Error saving to JSON: {e}")
     
     def add_face(self, image_path, label):
         """新しい顔を学習データに追加"""
@@ -74,29 +159,6 @@ class FaceDatabase:
             
             if not encodings:
                 raise ValueError("顔が検出されませんでした")
-            
-            # ラベルディレクトリの作成
-            label_dir = os.path.join(self.known_faces_dir, label)
-            os.makedirs(label_dir, exist_ok=True)
-            
-            # 画像を保存（一時的）
-            image_name = f"{label}_{len([l for l in self.known_labels if l == label])}.jpg"
-            save_path = os.path.join(label_dir, image_name)
-            
-            # PILで画像を開いて保存
-            try:
-                pil_image = Image.open(image_path)
-                # 画像サイズを制限してメモリ使用量を減らす
-                pil_image.thumbnail((400, 400), Image.Resampling.LANCZOS)
-                
-                # RGBモードに変換
-                if pil_image.mode in ('RGBA', 'P'):
-                    pil_image = pil_image.convert('RGB')
-                
-                pil_image.save(save_path, 'JPEG', quality=85)
-            except Exception as e:
-                print(f"Error saving image: {e}")
-                # 画像保存に失敗してもエンコーディングは保存
             
             # メモリ上のデータに追加
             self.known_faces.append(encodings[0])
@@ -163,3 +225,49 @@ class FaceDatabase:
             'unique_labels': len(set(self.known_labels)),
             'labels': dict([(label, self.get_face_count(label)) for label in set(self.known_labels)])
         }
+    
+    def backup_database(self, backup_path):
+        """データベースをバックアップ"""
+        try:
+            if self.use_sqlite:
+                # SQLiteファイルをコピー
+                import shutil
+                shutil.copy2(self.db_path, backup_path)
+            else:
+                # JSONファイルをコピー
+                import shutil
+                shutil.copy2(self.json_db_file, backup_path)
+            
+            print(f"Database backed up to: {backup_path}")
+        except Exception as e:
+            print(f"Error backing up database: {e}")
+    
+    def restore_database(self, backup_path):
+        """バックアップからデータベースを復元"""
+        try:
+            if self.use_sqlite:
+                import shutil
+                shutil.copy2(backup_path, self.db_path)
+            else:
+                import shutil
+                shutil.copy2(backup_path, self.json_db_file)
+            
+            # データを再読み込み
+            self.known_faces = []
+            self.known_labels = []
+            self.load_known_faces()
+            
+            print(f"Database restored from: {backup_path}")
+        except Exception as e:
+            print(f"Error restoring database: {e}")
+
+# 使用例
+if __name__ == "__main__":
+    # SQLiteを使用する場合
+    db = FaceDatabase(use_sqlite=True, db_path="persistent_face_db.db")
+    
+    # JSONを使用する場合
+    # db = FaceDatabase(use_sqlite=False)
+    
+    # 統計情報を表示
+    print("Database stats:", db.get_stats())
