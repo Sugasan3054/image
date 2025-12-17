@@ -57,3 +57,8 @@ uploads/*
 # Known faces data (optional - remove if you want to track known faces)
 known_faces/*
 !known_faces/.gitkeep
+ngrok.exe
+*.json
+!manifest.json
+!package.json
+!tsconfig.json
